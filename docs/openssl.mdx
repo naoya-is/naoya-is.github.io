@@ -1,0 +1,156 @@
+# OpenSSL
+
+https://docs.openssl.org/master/  
+https://docs.openssl.org/master/man1/
+
+---
+
+## プライベート認証局の作成
+
+### Root CA の作成
+
+`basicConstraints`: 認証局の証明書であることを示す。
+
+```shell
+openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -noenc \
+    -subj "/C=JP/O=homelab/OU=PKI/CN=Homelab Root CA G1" \
+    -keyout homelab-root-ca-g1.key -out homelab-root-ca-g1.crt \
+    -addext "basicConstraints=critical,CA:TRUE,pathlen:2" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -addext "subjectKeyIdentifier=hash"
+```
+
+生成結果の確認
+
+```shell
+openssl x509 -noout -text -in homelab-root-ca-g1.crt
+```
+
+### Intermediate CA の作成
+
+#### ECC（P-256）
+
+```shell
+openssl req -x509 -sha256 -days 1825 -noenc \
+    -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+    -subj "/C=JP/O=homelab/OU=PKI/CN=Homelab Intermediate CA G1" \
+    -keyout homelab-intermediate-ca-g1.key \
+    -out homelab-intermediate-ca-g1.crt \
+    -CA homelab-root-ca-g1.crt -CAkey homelab-root-ca-g1.key \
+    -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -addext "subjectKeyIdentifier=hash" \
+    -addext "authorityKeyIdentifier=keyid,issuer"
+```
+
+#### RSA
+
+```shell
+openssl req -x509 -sha256 -days 1825 -noenc \
+    -newkey rsa:4096 \
+    -subj "/C=JP/O=homelab/OU=PKI/CN=Homelab Intermediate CA G1" \
+    -keyout homelab-intermediate-ca-g1.key \
+    -out homelab-intermediate-ca-g1.crt \
+    -CA homelab-root-ca-g1.crt -CAkey homelab-root-ca-g1.key \
+    -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -addext "subjectKeyIdentifier=hash" \
+    -addext "authorityKeyIdentifier=keyid,issuer"
+```
+
+生成結果の確認
+
+```shell
+openssl x509 -noout -text -in homelab-intermediate-ca-g1.crt
+```
+:::tip
+ECC と RSA の違いはここ
+
+```shell
+-newkey rsa:4096
+-newkey ec -pkeyopt ec_paramgen_curve:P-256
+```
+:::
+
+### 証明書チェーンの検証
+
+ルート証明書 -> 中間CA証明書 の順でないとダメ
+
+```shell
+openssl verify -CAfile homelab-root-ca-g1.crt homelab-intermediate-ca-g1.crt
+```
+
+以下が返ってこれば成功
+
+```shell
+$ openssl verify -CAfile homelab-root-ca-g1.crt homelab-intermediate-ca-g1.crt
+homelab-intermediate-ca-g1.crt: OK
+```
+
+### エンドエンティティ証明書の作成
+
+いわゆる、サーバ証明書のこと
+
+#### ECC（P-256）
+
+```shell
+openssl req -x509 -sha256 -days 365 -noenc \
+    -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+    -subj "/C=JP/O=homelab/OU=Server/CN=Server" \
+    -keyout homelab-server.key -out homelab-server.crt \
+    -CA homelab-intermediate-ca-g1.crt -CAkey homelab-intermediate-ca-g1.key \
+    -addext "basicConstraints=critical,CA:FALSE" \
+    -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+    -addext "extendedKeyUsage=serverAuth" \
+    -addext "subjectAltName=DNS:*.example.com" \
+    -addext "subjectKeyIdentifier=hash" \
+    -addext "authorityKeyIdentifier=keyid,issuer"
+```
+
+#### RSA
+
+```shell
+openssl req -x509 -sha256 -days 365 -noenc \
+    -newkey rsa:4096 \
+    -subj "/C=JP/O=homelab/OU=Server/CN=Server" \
+    -keyout homelab-server.key -out homelab-server.crt \
+    -CA homelab-intermediate-ca-g1.crt -CAkey homelab-intermediate-ca-g1.key \
+    -addext "basicConstraints=critical,CA:FALSE" \
+    -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+    -addext "extendedKeyUsage=serverAuth" \
+    -addext "subjectAltName=DNS:*.example.com" \
+    -addext "subjectKeyIdentifier=hash" \
+    -addext "authorityKeyIdentifier=keyid,issuer"
+```
+
+生成結果の確認
+
+```shell
+openssl x509 -noout -text -in homelab-server.crt
+```
+
+## 証明書の結合
+
+中間CAとサーバ証明書を結合する
+
+```shell
+cat homelab-server.crt homelab-intermediate-ca-g1.crt > homelab-server-fullchain.pem
+```
+
+
+## 証明書の検証
+
+`-untrusted` は 「信頼の起点ではないけど、チェーン検証に使う証明書」 を指定するためのオプション
+
+
+Root ↔ Intermediate
+
+```shell
+openssl verify -CAfile homelab-root-ca-g1.crt homelab-intermediate-ca-g1.crt
+``` 
+
+Server ↔ Intermediate ↔ Root
+
+```shell
+openssl verify -CAfile homelab-root-ca-g1.crt -untrusted homelab-intermediate-ca-g1.crt homelab-server.crt
+```
